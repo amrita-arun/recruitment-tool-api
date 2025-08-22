@@ -23,6 +23,8 @@ import java.util.UUID;
 public class Applicant {
 
     @Id
+    @org.hibernate.annotations.UuidGenerator
+    @EqualsAndHashCode.Include
     private UUID id;
 
     private String name;
@@ -45,7 +47,7 @@ public class Applicant {
 
     @Column(columnDefinition = "jsonb")
     @JdbcTypeCode(SqlTypes.JSON)
-    private String raw;
+    private JsonNode raw;
 
     private String resumeUrl;
 
