@@ -13,9 +13,26 @@ import java.util.UUID;
 
 public interface ApplicantRepository extends JpaRepository<Applicant, UUID> {
     @Query("""
-            select a from Applicant a
-            where (:q is null or lower(a.name) like lower(concat('%', :q, '%'))
-            or lower(a.email) like lower(concat('%', :q, '%')))
-            """)
+      select a from Applicant a
+      where (:q is null
+             or lower(a.name)  like lower(concat('%', cast(:q as string), '%'))
+             or lower(a.email) like lower(concat('%', cast(:q as string), '%')))
+      order by a.createdAt desc
+    """)
     Page<Applicant> search(@Param("q") String q, Pageable pageable);
+
+    @Query("""
+      select a from Applicant a
+      where (:q is null
+             or lower(a.name)  like lower(concat('%', cast(:q as string), '%'))
+             or lower(a.email) like lower(concat('%', cast(:q as string), '%')))
+        and (:status is null or a.status = :status)
+      order by a.createdAt desc
+    """)
+    Page<Applicant> search(
+            @Param("q") String q,
+            @Param("status") com.example.recruitment_svc.model.Status status,
+            org.springframework.data.domain.Pageable pageable
+    );
+
 }

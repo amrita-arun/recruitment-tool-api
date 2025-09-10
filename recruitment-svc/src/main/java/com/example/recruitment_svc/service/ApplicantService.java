@@ -17,6 +17,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import java.util.LinkedHashSet;
 
 
 import java.io.*;
@@ -24,7 +25,10 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @Service
 @RequiredArgsConstructor
@@ -34,9 +38,9 @@ public class ApplicantService {
     private final ApplicantMapper map;
     private final ObjectMapper objectMapper;
 
-    public Page<ApplicantSummaryDto> list(String q, Pageable p) {
+    public Page<ApplicantSummaryDto> list(String q, com.example.recruitment_svc.model.Status status, Pageable p) {
         var query = (q == null || q.isBlank()) ? null : q.trim();
-        return repo.search(query, p).map(map::toSummary);
+        return repo.search(query, status, p).map(map::toSummary);
     }
 
     public ApplicantDetailDto get(UUID id) {
@@ -63,14 +67,32 @@ public class ApplicantService {
             }
 
             int iName     = idx(headerIndex, "name", "full name");
-            int iEmail    = idx(headerIndex, "email", "email address", "e-mail", "personal email", "school email");
+            int iEmail    = idx(headerIndex, "email", "email address", "e-mail", "personal email", "school email", "usc email");
             int iPhone    = idx(headerIndex, "phone", "phone number", "mobile number", "mobile");
             int iLocation = idx(headerIndex, "location", "city", "hometown");
-            int iMajor    = idx(headerIndex, "major");
+            int iMajor    = idx(headerIndex, "major", "major(s)");
             int iYear     = idx(headerIndex, "year", "class year", "grade");
-            int iResumeUrl = idx(headerIndex, "resume url", "resume", "resume link", "cv url", "cv");
+            int iResumeUrl = idx(headerIndex,
+                    "resume url", "resume", "resume link", "cv url", "cv",
+                    "link to resume (pdf), linkedin, or portfolio"
+            );
             int iGpa      = idx(headerIndex, "gpa");
 
+            // normalized keys to exclude from answers
+            var profileKeys = Stream.of(
+                            "id",
+                            "name", "full name",
+                            "email", "email address", "e-mail", "usc email",
+                            "phone", "phone number",
+                            "location", "city",
+                            "major", "major(s)",
+                            "year", "class year",
+                            "gpa",
+                            "status",
+                            "resume url", "resume", "resume link", "cv url", "cv",
+                            "link to resume (pdf), linkedin, or portfolio"
+                    ).map(ApplicantService::norm)
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
             String[] nextRecord;
 
                 // we are going to read data line by line
@@ -93,6 +115,18 @@ public class ApplicantService {
                     }
                     var rawNode = objectMapper.valueToTree(originalRow);
 
+                    // answers = only non-profile columns with non-blank values
+                    var answersMap = new LinkedHashMap<String, String>();
+                    for (int i = 0; i < header.length && i < nextRecord.length; i++) {
+                        var colName = header[i];
+                        var normKey = norm(colName);
+                        var value = nextRecord[i];
+                        if (!profileKeys.contains(normKey) && value != null && !value.trim().isEmpty()) {
+                            answersMap.put(colName, value);
+                        }
+                    }
+                    var answersNode = objectMapper.valueToTree(answersMap);
+
                     var a = new Applicant();
                     a.setName(name);
                     a.setEmail(email);
@@ -104,6 +138,7 @@ public class ApplicantService {
                     a.setStatus(Status.PENDING);
                     a.setResumeUrl(resumeUrl);
                     a.setRaw(rawNode);
+                    a.setAnswers(answersNode);
                     repo.save(a);
                     count++;
                     System.out.println();
@@ -156,6 +191,16 @@ public class ApplicantService {
             return null; // don’t fail the whole import for one bad value
         }
     }
+
+    @Transactional
+    public ApplicantDetailDto updateStatus(UUID id, Status newStatus) {
+        var a = repo.findById(id).orElseThrow(() -> new NotFoundException("applicant " + id));
+        a.setStatus(newStatus);
+        var saved = repo.save(a);
+        return map.toDetail(saved);
+    }
+
+
 
 
 }
