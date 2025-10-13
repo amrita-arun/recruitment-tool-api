@@ -51,4 +51,8 @@ public class Applicant {
 
     private String resumeUrl;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "recruitment_cycle_id", nullable = false)
+    private RecruitmentCycle recruitmentCycle;
+
 }

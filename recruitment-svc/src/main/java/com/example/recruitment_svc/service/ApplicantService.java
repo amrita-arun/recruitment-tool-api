@@ -4,8 +4,16 @@ import com.example.recruitment_svc.dtos.ApplicantDetailDto;
 import com.example.recruitment_svc.dtos.ApplicantSummaryDto;
 import com.example.recruitment_svc.mappers.ApplicantMapper;
 import com.example.recruitment_svc.model.Applicant;
+import com.example.recruitment_svc.model.Organization;
+import com.example.recruitment_svc.model.OrganizationMember;
+import com.example.recruitment_svc.model.RecruitmentCycle;
 import com.example.recruitment_svc.model.Status;
+import com.example.recruitment_svc.model.User;
 import com.example.recruitment_svc.repository.ApplicantRepository;
+import com.example.recruitment_svc.repository.OrganizationMemberRepository;
+import com.example.recruitment_svc.repository.OrganizationRepository;
+import com.example.recruitment_svc.repository.RecruitmentCycleRepository;
+import com.example.recruitment_svc.repository.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencsv.CSVParserBuilder;
 import com.opencsv.CSVReader;
@@ -14,6 +22,8 @@ import com.opencsv.exceptions.CsvValidationException;
 import com.example.recruitment_svc.errors.NotFoundException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -37,19 +47,74 @@ public class ApplicantService {
     private final ApplicantRepository repo;
     private final ApplicantMapper map;
     private final ObjectMapper objectMapper;
+    private final OrganizationRepository organizationRepository;
+    private final OrganizationMemberRepository organizationMemberRepository;
+    private final RecruitmentCycleRepository recruitmentCycleRepository;
+    private final UserRepository userRepository;
 
-    public Page<ApplicantSummaryDto> list(String q, com.example.recruitment_svc.model.Status status, Pageable p) {
+    public Page<ApplicantSummaryDto> listByOrganization(UUID organizationId, String q, com.example.recruitment_svc.model.Status status, Pageable p) {
+        User currentUser = getCurrentUser();
+        Organization organization = organizationRepository.findById(organizationId)
+                .orElseThrow(() -> new NotFoundException("Organization not found"));
+        
+        // Check if user is member of this organization
+        organizationMemberRepository.findByUserAndOrganization(currentUser, organization)
+                .orElseThrow(() -> new NotFoundException("You are not a member of this organization"));
+        
         var query = (q == null || q.isBlank()) ? null : q.trim();
-        return repo.search(query, status, p).map(map::toSummary);
+        return repo.searchByOrganization(organizationId, query, status, p).map(map::toSummary);
     }
 
-    public ApplicantDetailDto get(UUID id) {
-        var a = repo.findById(id).orElseThrow(() -> new NotFoundException("applicant " + id));
+    public Page<ApplicantSummaryDto> listByRecruitmentCycle(UUID recruitmentCycleId, String q, com.example.recruitment_svc.model.Status status, Pageable p) {
+        User currentUser = getCurrentUser();
+        RecruitmentCycle cycle = recruitmentCycleRepository.findById(recruitmentCycleId)
+                .orElseThrow(() -> new NotFoundException("Recruitment cycle not found"));
+        
+        // Check if user is member of this organization
+        organizationMemberRepository.findByUserAndOrganization(currentUser, cycle.getOrganization())
+                .orElseThrow(() -> new NotFoundException("You are not a member of this organization"));
+        
+        var query = (q == null || q.isBlank()) ? null : q.trim();
+        return repo.searchByRecruitmentCycle(recruitmentCycleId, query, status, p).map(map::toSummary);
+    }
+
+    public ApplicantDetailDto getByOrganization(UUID organizationId, UUID id) {
+        User currentUser = getCurrentUser();
+        Organization organization = organizationRepository.findById(organizationId)
+                .orElseThrow(() -> new NotFoundException("Organization not found"));
+        
+        // Check if user is member of this organization
+        organizationMemberRepository.findByUserAndOrganization(currentUser, organization)
+                .orElseThrow(() -> new NotFoundException("You are not a member of this organization"));
+        
+        var a = repo.findByIdAndOrganization(id, organizationId)
+                .orElseThrow(() -> new NotFoundException("applicant " + id));
+        return map.toDetail(a);
+    }
+
+    public ApplicantDetailDto getByRecruitmentCycle(UUID recruitmentCycleId, UUID id) {
+        User currentUser = getCurrentUser();
+        RecruitmentCycle cycle = recruitmentCycleRepository.findById(recruitmentCycleId)
+                .orElseThrow(() -> new NotFoundException("Recruitment cycle not found"));
+        
+        // Check if user is member of this organization
+        organizationMemberRepository.findByUserAndOrganization(currentUser, cycle.getOrganization())
+                .orElseThrow(() -> new NotFoundException("You are not a member of this organization"));
+        
+        var a = repo.findByIdAndRecruitmentCycle(id, recruitmentCycleId)
+                .orElseThrow(() -> new NotFoundException("applicant " + id));
         return map.toDetail(a);
     }
 
     @Transactional
-    public int importCsv(InputStream csv) throws IOException, CsvValidationException {
+    public int importCsv(UUID recruitmentCycleId, InputStream csv) throws IOException, CsvValidationException {
+        User currentUser = getCurrentUser();
+        RecruitmentCycle cycle = recruitmentCycleRepository.findById(recruitmentCycleId)
+                .orElseThrow(() -> new NotFoundException("Recruitment cycle not found"));
+        
+        // Check if user is member of this organization
+        organizationMemberRepository.findByUserAndOrganization(currentUser, cycle.getOrganization())
+                .orElseThrow(() -> new NotFoundException("You are not a member of this organization"));
         int count = 0;
 
         try (var reader = new CSVReaderBuilder(
@@ -139,9 +204,9 @@ public class ApplicantService {
                     a.setResumeUrl(resumeUrl);
                     a.setRaw(rawNode);
                     a.setAnswers(answersNode);
+                    a.setRecruitmentCycle(cycle);
                     repo.save(a);
                     count++;
-                    System.out.println();
                 }
             }
 
@@ -193,14 +258,44 @@ public class ApplicantService {
     }
 
     @Transactional
-    public ApplicantDetailDto updateStatus(UUID id, Status newStatus) {
-        var a = repo.findById(id).orElseThrow(() -> new NotFoundException("applicant " + id));
+    public ApplicantDetailDto updateStatusByOrganization(UUID organizationId, UUID id, Status newStatus) {
+        User currentUser = getCurrentUser();
+        Organization organization = organizationRepository.findById(organizationId)
+                .orElseThrow(() -> new NotFoundException("Organization not found"));
+        
+        // Check if user is member of this organization
+        organizationMemberRepository.findByUserAndOrganization(currentUser, organization)
+                .orElseThrow(() -> new NotFoundException("You are not a member of this organization"));
+        
+        var a = repo.findByIdAndOrganization(id, organizationId)
+                .orElseThrow(() -> new NotFoundException("applicant " + id));
         a.setStatus(newStatus);
         var saved = repo.save(a);
         return map.toDetail(saved);
     }
 
+    @Transactional
+    public ApplicantDetailDto updateStatusByRecruitmentCycle(UUID recruitmentCycleId, UUID id, Status newStatus) {
+        User currentUser = getCurrentUser();
+        RecruitmentCycle cycle = recruitmentCycleRepository.findById(recruitmentCycleId)
+                .orElseThrow(() -> new NotFoundException("Recruitment cycle not found"));
+        
+        // Check if user is member of this organization
+        organizationMemberRepository.findByUserAndOrganization(currentUser, cycle.getOrganization())
+                .orElseThrow(() -> new NotFoundException("You are not a member of this organization"));
+        
+        var a = repo.findByIdAndRecruitmentCycle(id, recruitmentCycleId)
+                .orElseThrow(() -> new NotFoundException("applicant " + id));
+        a.setStatus(newStatus);
+        var saved = repo.save(a);
+        return map.toDetail(saved);
+    }
 
-
+    private User getCurrentUser() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        String email = authentication.getName();
+        return userRepository.findByEmail(email)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+    }
 
 }
